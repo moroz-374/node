@@ -17,6 +17,7 @@ export const configSchema = z
         XTLS_API_PORT: z.string().transform((port) => {
             return parseInt(port, 10);
         }),
+        XRAY_ACCESS_LOG_PATH: z.string().default('/var/log/xray/access.log'),
         INTERNAL_REST_TOKEN: z.string(),
         SUPERVISORD_USER: z.string(),
         SUPERVISORD_PASSWORD: z.string(),

@@ -36,10 +36,11 @@ interface IGenerateApiConfigParams {
         socketPath: string;
         token: string;
     };
+    accessLogPath: string;
 }
 
 export const generateApiConfig = (args: IGenerateApiConfigParams): Record<string, unknown> => {
-    const { config, torrentBlockerState, internal } = args;
+    const { config, torrentBlockerState, internal, accessLogPath } = args;
 
     const policyConfig = config.policy as undefined | IPolicyConfig;
     const serverCerts = getServerCerts();
@@ -59,6 +60,12 @@ export const generateApiConfig = (args: IGenerateApiConfigParams): Record<string
 
     const result = {
         ...config,
+        log: {
+            ...((config.log as Record<string, unknown> | undefined) || {}),
+            access: accessLogPath,
+            loglevel: ((config.log as Record<string, unknown> | undefined)?.loglevel as string | undefined) ||
+                'warning',
+        },
         ...XRAY_DEFAULT_STATS_MODEL,
         ...XRAY_DEFAULT_API_MODEL,
         inbounds: [

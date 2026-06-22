@@ -167,6 +167,7 @@ export class XrayService implements OnApplicationBootstrap {
                 config: body.xrayConfig,
                 torrentBlockerState: isTorrentBlockerEnabled,
                 internal: this.internal,
+                accessLogPath: this.configService.getOrThrow<string>('XRAY_ACCESS_LOG_PATH'),
             });
 
             await this.internalService.extractUsersFromConfig(body.internals.hashes, fullConfig);
