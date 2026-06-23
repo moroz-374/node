@@ -10,9 +10,12 @@ export class TrafficAuditService implements OnModuleInit {
     public onModuleInit(): void {
         const backendUrl = this.configService.getOrThrow<string>('TRAFFIC_AUDIT_BACKEND_URL');
         const token = this.configService.getOrThrow<string>('TRAFFIC_AUDIT_INGEST_TOKEN');
+        const nodeUuid = this.configService.getOrThrow<string>('TRAFFIC_AUDIT_NODE_UUID');
 
-        if (!backendUrl || !token) {
-            this.logger.log('Traffic audit sender disabled: backend URL or ingest token is not configured');
+        if (!backendUrl || !token || !nodeUuid) {
+            this.logger.log(
+                'Traffic audit sender disabled: backend URL, ingest token, or node UUID is not configured',
+            );
 
             return;
         }
