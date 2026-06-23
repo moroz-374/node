@@ -18,6 +18,12 @@ export const configSchema = z
             return parseInt(port, 10);
         }),
         XRAY_ACCESS_LOG_PATH: z.string().default('/var/log/xray/access.log'),
+        TRAFFIC_AUDIT_BACKEND_URL: z.string().default(''),
+        TRAFFIC_AUDIT_INGEST_TOKEN: z.string().default(''),
+        TRAFFIC_AUDIT_FLUSH_INTERVAL_MS: z
+            .string()
+            .default('5000')
+            .transform((value) => parseInt(value, 10)),
         INTERNAL_REST_TOKEN: z.string(),
         SUPERVISORD_USER: z.string(),
         SUPERVISORD_PASSWORD: z.string(),
