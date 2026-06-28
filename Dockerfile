@@ -10,6 +10,7 @@ ADD . .
 
 RUN npm ci --legacy-peer-deps
 RUN npm run build --omit=dev
+RUN npm run test:traffic-audit
 
 RUN apk add --no-cache curl unzip \
     && curl -L ${XRAY_CORE_INSTALL_SCRIPT} | sh -s -- ${XRAY_CORE_VERSION} ${UPSTREAM_REPO}
@@ -48,7 +49,7 @@ COPY package*.json ./
 COPY ./libs ./libs
 
 RUN apk add --no-cache supervisor libnftnl libmnl && \
-    mkdir -p /var/log/supervisor && \
+    mkdir -p /var/log/supervisor /var/log/xray && \
     chmod +x /usr/local/bin/docker-entrypoint.sh && \
     ln -s /usr/local/bin/xray /usr/local/bin/rw-core
 

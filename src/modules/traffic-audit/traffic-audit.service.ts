@@ -1,5 +1,8 @@
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
+
+import { open, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
@@ -12,26 +15,45 @@ interface TrafficAuditPayloadEvent extends TrafficAuditAccessLogEvent {
     eventId: string;
 }
 
+interface FileIdentity {
+    device: number;
+    inode: number;
+}
+
+const INGEST_BATCH_SIZE = 5_000;
+const READ_CHUNK_SIZE = 64 * 1_024;
+
 @Injectable()
-export class TrafficAuditService implements OnModuleInit, OnModuleDestroy {
+export class TrafficAuditService implements OnModuleDestroy, OnModuleInit {
     private readonly logger = new Logger(TrafficAuditService.name);
 
+    private accessLogHandle: FileHandle | null = null;
+    private accessLogIdentity: FileIdentity | null = null;
+    private activeFlush: Promise<boolean> | null = null;
+    private activeRead: Promise<void> | null = null;
+    private backendUrl = '';
+    private backoffInitialMs = 1_000;
+    private backoffMaxMs = 60_000;
     private buffer = '';
     private cursor = 0;
-    private flushTimer: NodeJS.Timeout | null = null;
-    private pollTimer: NodeJS.Timeout | null = null;
-    private isFlushing = false;
-    private readonly queue: TrafficAuditPayloadEvent[] = [];
-
-    private backendUrl = '';
-    private token = '';
-    private nodeUuid = '';
-    private accessLogPath = '';
+    private enabled = false;
     private flushIntervalMs = 5_000;
+    private flushTimer: NodeJS.Timeout | null = null;
+    private hasCompletedInitialOpen = false;
+    private nextFlushAt = 0;
+    private nodeUuid = '';
+    private pollTimer: NodeJS.Timeout | null = null;
+    private queueMaxSize = 20_000;
+    private readonly queue: TrafficAuditPayloadEvent[] = [];
+    private requestTimeoutMs = 10_000;
+    private retryAttempt = 0;
+    private shuttingDown = false;
+    private token = '';
+    private accessLogPath = '';
 
     constructor(private readonly configService: ConfigService) {}
 
-    public onModuleInit(): void {
+    public async onModuleInit(): Promise<void> {
         this.backendUrl = this.configService.getOrThrow<string>('TRAFFIC_AUDIT_BACKEND_URL');
         this.token = this.configService.getOrThrow<string>('TRAFFIC_AUDIT_INGEST_TOKEN');
         this.nodeUuid = this.configService.getOrThrow<string>('TRAFFIC_AUDIT_NODE_UUID');
@@ -39,6 +61,14 @@ export class TrafficAuditService implements OnModuleInit, OnModuleDestroy {
         this.flushIntervalMs = this.configService.getOrThrow<number>(
             'TRAFFIC_AUDIT_FLUSH_INTERVAL_MS',
         );
+        this.queueMaxSize = this.configService.getOrThrow<number>('TRAFFIC_AUDIT_QUEUE_MAX_SIZE');
+        this.requestTimeoutMs = this.configService.getOrThrow<number>(
+            'TRAFFIC_AUDIT_REQUEST_TIMEOUT_MS',
+        );
+        this.backoffInitialMs = this.configService.getOrThrow<number>(
+            'TRAFFIC_AUDIT_BACKOFF_INITIAL_MS',
+        );
+        this.backoffMaxMs = this.configService.getOrThrow<number>('TRAFFIC_AUDIT_BACKOFF_MAX_MS');
 
         if (!this.backendUrl || !this.token || !this.nodeUuid) {
             this.logger.log(
@@ -48,10 +78,11 @@ export class TrafficAuditService implements OnModuleInit, OnModuleDestroy {
             return;
         }
 
-        this.initializeCursor();
+        this.enabled = true;
+        await this.openAccessLog(true);
 
         this.pollTimer = setInterval(() => {
-            void this.readNewLines();
+            void this.scheduleRead();
         }, 1_000);
 
         this.flushTimer = setInterval(() => {
@@ -61,7 +92,13 @@ export class TrafficAuditService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(`Traffic audit sender enabled. Access log: ${this.accessLogPath}`);
     }
 
-    public onModuleDestroy(): void {
+    public async onModuleDestroy(): Promise<void> {
+        if (!this.enabled) {
+            return;
+        }
+
+        this.shuttingDown = true;
+
         if (this.pollTimer) {
             clearInterval(this.pollTimer);
         }
@@ -69,52 +106,113 @@ export class TrafficAuditService implements OnModuleInit, OnModuleDestroy {
         if (this.flushTimer) {
             clearInterval(this.flushTimer);
         }
-    }
 
-    private initializeCursor(): void {
-        if (!existsSync(this.accessLogPath)) {
-            this.cursor = 0;
-
-            this.logger.warn(`Traffic audit access log does not exist yet: ${this.accessLogPath}`);
-
-            return;
+        if (this.activeRead) {
+            await this.activeRead;
         }
 
-        this.cursor = statSync(this.accessLogPath).size;
+        await this.scheduleRead();
+
+        if (this.activeFlush) {
+            await this.activeFlush;
+        }
+
+        while (this.queue.length > 0) {
+            const sent = await this.flush(true);
+
+            if (!sent) {
+                break;
+            }
+        }
+
+        await this.closeAccessLog();
+
+        if (this.queue.length > 0) {
+            this.logger.warn(
+                `Traffic audit shutdown completed with ${this.queue.length} unsent events`,
+            );
+        }
+    }
+
+    private async scheduleRead(): Promise<void> {
+        if (this.activeRead) {
+            return this.activeRead;
+        }
+
+        this.activeRead = this.readNewLines().finally(() => {
+            this.activeRead = null;
+        });
+
+        return this.activeRead;
     }
 
     private async readNewLines(): Promise<void> {
-        if (!existsSync(this.accessLogPath)) {
+        if (!this.accessLogHandle) {
+            await this.openAccessLog(false);
+
+            if (!this.accessLogHandle) {
+                return;
+            }
+        }
+
+        let pathStat;
+
+        try {
+            pathStat = await stat(this.accessLogPath);
+        } catch (error) {
+            if (!isFileNotFoundError(error)) {
+                this.logger.warn(`Cannot stat traffic audit access log: ${getErrorMessage(error)}`);
+            }
+
             return;
         }
 
-        const stat = statSync(this.accessLogPath);
+        const pathIdentity = getFileIdentity(pathStat);
 
-        if (stat.size < this.cursor) {
+        if (!isSameFile(this.accessLogIdentity, pathIdentity)) {
+            await this.readCurrentFileToEnd();
+            await this.closeAccessLog();
+            this.discardPartialLine('log rotation');
+            await this.openAccessLog(false);
+        }
+
+        await this.readCurrentFileToEnd();
+    }
+
+    private async readCurrentFileToEnd(): Promise<void> {
+        const handle = this.accessLogHandle;
+
+        if (!handle) {
+            return;
+        }
+
+        const handleStat = await handle.stat();
+
+        if (handleStat.size < this.cursor) {
             this.cursor = 0;
-            this.buffer = '';
+            this.discardPartialLine('log truncation');
         }
 
-        if (stat.size === this.cursor) {
-            return;
+        const targetSize = handleStat.size;
+
+        while (this.cursor < targetSize) {
+            const bytesToRead = Math.min(READ_CHUNK_SIZE, targetSize - this.cursor);
+            const chunk = Buffer.allocUnsafe(bytesToRead);
+            const { bytesRead } = await handle.read(chunk, 0, bytesToRead, this.cursor);
+
+            if (bytesRead === 0) {
+                break;
+            }
+
+            this.cursor += bytesRead;
+            this.processChunk(chunk.toString('utf8', 0, bytesRead));
         }
+    }
 
-        const stream = createReadStream(this.accessLogPath, {
-            start: this.cursor,
-            end: stat.size - 1,
-            encoding: 'utf8',
-        });
-
-        let chunk = '';
-
-        for await (const data of stream) {
-            chunk += data;
-        }
-
-        this.cursor = stat.size;
-
+    private processChunk(chunk: string): void {
         const lines = (this.buffer + chunk).split(/\r?\n/);
         this.buffer = lines.pop() || '';
+        let droppedEvents = 0;
 
         for (const line of lines) {
             const parsed = parseTrafficAuditAccessLogLine(line);
@@ -123,25 +221,54 @@ export class TrafficAuditService implements OnModuleInit, OnModuleDestroy {
                 continue;
             }
 
-            this.queue.push({
+            droppedEvents += this.enqueue({
                 ...parsed,
                 eventId: randomUUID(),
             });
         }
 
-        if (this.queue.length >= 500) {
+        if (droppedEvents > 0) {
+            this.logger.warn(
+                `Traffic audit queue limit (${this.queueMaxSize}) reached; dropped ${droppedEvents} oldest events`,
+            );
+        }
+
+        if (this.queue.length >= 500 && !this.shuttingDown) {
             void this.flush();
         }
     }
 
-    private async flush(): Promise<void> {
-        if (this.isFlushing || this.queue.length === 0) {
-            return;
+    private enqueue(event: TrafficAuditPayloadEvent): number {
+        let droppedEvents = 0;
+
+        if (this.queue.length >= this.queueMaxSize) {
+            this.queue.shift();
+            droppedEvents = 1;
         }
 
-        this.isFlushing = true;
+        this.queue.push(event);
 
-        const events = this.queue.splice(0, 5_000);
+        return droppedEvents;
+    }
+
+    private async flush(ignoreBackoff = false): Promise<boolean> {
+        if (this.activeFlush) {
+            return this.activeFlush;
+        }
+
+        if (this.queue.length === 0 || (!ignoreBackoff && Date.now() < this.nextFlushAt)) {
+            return false;
+        }
+
+        this.activeFlush = this.sendNextBatch().finally(() => {
+            this.activeFlush = null;
+        });
+
+        return this.activeFlush;
+    }
+
+    private async sendNextBatch(): Promise<boolean> {
+        const events = this.queue.splice(0, INGEST_BATCH_SIZE);
 
         try {
             const response = await fetch(`${this.backendUrl}/api/monitoring/ingest`, {
@@ -154,23 +281,88 @@ export class TrafficAuditService implements OnModuleInit, OnModuleDestroy {
                     nodeUuid: this.nodeUuid,
                     events,
                 }),
+                signal: AbortSignal.timeout(this.requestTimeoutMs),
             });
 
             if (!response.ok) {
-                this.queue.unshift(...events);
-
-                this.logger.warn(`Traffic audit ingest failed with HTTP ${response.status}`);
+                throw new Error(`HTTP ${response.status}`);
             }
+
+            this.retryAttempt = 0;
+            this.nextFlushAt = 0;
+
+            return true;
         } catch (error) {
             this.queue.unshift(...events);
+            this.retryAttempt += 1;
+
+            const delay = Math.min(
+                this.backoffInitialMs * 2 ** (this.retryAttempt - 1),
+                this.backoffMaxMs,
+            );
+            this.nextFlushAt = Date.now() + delay;
 
             this.logger.warn(
-                `Traffic audit ingest request failed: ${
-                    error instanceof Error ? error.message : String(error)
-                }`,
+                `Traffic audit ingest failed; retrying in ${delay}ms: ${getErrorMessage(error)}`,
             );
-        } finally {
-            this.isFlushing = false;
+
+            return false;
         }
     }
+
+    private async openAccessLog(startAtEnd: boolean): Promise<void> {
+        try {
+            const handle = await open(this.accessLogPath, 'r');
+            const fileStat = await handle.stat();
+
+            this.accessLogHandle = handle;
+            this.accessLogIdentity = getFileIdentity(fileStat);
+            this.cursor = startAtEnd && !this.hasCompletedInitialOpen ? fileStat.size : 0;
+            this.hasCompletedInitialOpen = true;
+        } catch (error) {
+            this.hasCompletedInitialOpen = true;
+
+            if (!isFileNotFoundError(error)) {
+                this.logger.warn(`Cannot open traffic audit access log: ${getErrorMessage(error)}`);
+            }
+        }
+    }
+
+    private async closeAccessLog(): Promise<void> {
+        const handle = this.accessLogHandle;
+
+        this.accessLogHandle = null;
+        this.accessLogIdentity = null;
+        this.cursor = 0;
+
+        if (handle) {
+            await handle.close();
+        }
+    }
+
+    private discardPartialLine(reason: string): void {
+        if (this.buffer) {
+            this.logger.warn(`Discarded partial traffic audit log line after ${reason}`);
+            this.buffer = '';
+        }
+    }
+}
+
+function getFileIdentity(fileStat: { dev: number; ino: number }): FileIdentity {
+    return {
+        device: fileStat.dev,
+        inode: fileStat.ino,
+    };
+}
+
+function isSameFile(left: FileIdentity | null, right: FileIdentity): boolean {
+    return left !== null && left.device === right.device && left.inode === right.inode;
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+    return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
+function getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
 }

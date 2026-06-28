@@ -1,0 +1,148 @@
+const assert = require('node:assert/strict');
+const { appendFile, mkdtemp, rename, rm, writeFile } = require('node:fs/promises');
+const { tmpdir } = require('node:os');
+const { join } = require('node:path');
+const test = require('node:test');
+
+const {
+    TrafficAuditService,
+} = require('../../dist/src/modules/traffic-audit/traffic-audit.service');
+
+const FIRST_LINE =
+    '2026/06/28 10:00:00 198.51.100.10:1000 accepted tcp:first.example:443 [in -> direct] email: first-user\n';
+const SECOND_LINE =
+    '2026/06/28 10:00:01 198.51.100.10:1001 accepted udp:second.example:53 [in -> direct] email: second-user\n';
+
+test('bounds the in-memory queue by dropping the oldest events', async () => {
+    const fixture = await createFixture({ TRAFFIC_AUDIT_QUEUE_MAX_SIZE: 1 });
+
+    try {
+        await appendFile(fixture.logPath, FIRST_LINE + SECOND_LINE);
+        await fixture.service.scheduleRead();
+
+        assert.equal(fixture.service.queue.length, 1);
+        assert.equal(fixture.service.queue[0].clientIdentifier, 'second-user');
+    } finally {
+        global.fetch = async () => ({ ok: true, status: 200 });
+        await fixture.dispose();
+    }
+});
+
+test('reads the old inode to the end before switching to a rotated log', async () => {
+    const fixture = await createFixture();
+
+    try {
+        await appendFile(fixture.logPath, FIRST_LINE);
+        await rename(fixture.logPath, `${fixture.logPath}.1`);
+        await writeFile(fixture.logPath, SECOND_LINE);
+
+        await fixture.service.scheduleRead();
+
+        assert.deepEqual(
+            fixture.service.queue.map((event) => event.clientIdentifier),
+            ['first-user', 'second-user'],
+        );
+    } finally {
+        global.fetch = async () => ({ ok: true, status: 200 });
+        await fixture.dispose();
+    }
+});
+
+test('restores a failed batch and suppresses retries until backoff expires', async () => {
+    const fixture = await createFixture();
+    let requestCount = 0;
+
+    try {
+        await appendFile(fixture.logPath, FIRST_LINE);
+        await fixture.service.scheduleRead();
+
+        global.fetch = async () => {
+            requestCount += 1;
+
+            return { ok: false, status: 503 };
+        };
+
+        assert.equal(await fixture.service.flush(), false);
+        assert.equal(fixture.service.queue.length, 1);
+        assert.equal(await fixture.service.flush(), false);
+        assert.equal(requestCount, 1);
+
+        fixture.service.nextFlushAt = 0;
+        global.fetch = async () => {
+            requestCount += 1;
+
+            return { ok: true, status: 200 };
+        };
+
+        assert.equal(await fixture.service.flush(), true);
+        assert.equal(fixture.service.queue.length, 0);
+        assert.equal(requestCount, 2);
+    } finally {
+        await fixture.dispose();
+    }
+});
+
+test('reads pending log data and flushes it during shutdown', async () => {
+    const fixture = await createFixture();
+    const payloads = [];
+
+    try {
+        global.fetch = async (_url, options) => {
+            payloads.push(JSON.parse(options.body));
+
+            return { ok: true, status: 200 };
+        };
+
+        await appendFile(fixture.logPath, FIRST_LINE);
+        await fixture.service.onModuleDestroy();
+        fixture.disposed = true;
+
+        assert.equal(payloads.length, 1);
+        assert.equal(payloads[0].events[0].clientIdentifier, 'first-user');
+        assert.equal(fixture.service.queue.length, 0);
+    } finally {
+        await fixture.dispose();
+    }
+});
+
+async function createFixture(overrides = {}) {
+    const directory = await mkdtemp(join(tmpdir(), 'traffic-audit-'));
+    const logPath = join(directory, 'access.log');
+    await writeFile(logPath, '');
+
+    const config = {
+        TRAFFIC_AUDIT_BACKEND_URL: 'http://backend.test',
+        TRAFFIC_AUDIT_INGEST_TOKEN: 'test-token',
+        TRAFFIC_AUDIT_NODE_UUID: '00000000-0000-0000-0000-000000000001',
+        XRAY_ACCESS_LOG_PATH: logPath,
+        TRAFFIC_AUDIT_FLUSH_INTERVAL_MS: 60_000,
+        TRAFFIC_AUDIT_QUEUE_MAX_SIZE: 20_000,
+        TRAFFIC_AUDIT_REQUEST_TIMEOUT_MS: 1_000,
+        TRAFFIC_AUDIT_BACKOFF_INITIAL_MS: 1_000,
+        TRAFFIC_AUDIT_BACKOFF_MAX_MS: 60_000,
+        ...overrides,
+    };
+    const service = new TrafficAuditService({
+        getOrThrow(key) {
+            assert.notEqual(config[key], undefined, `missing test config: ${key}`);
+
+            return config[key];
+        },
+    });
+    await service.onModuleInit();
+
+    return {
+        directory,
+        disposed: false,
+        logPath,
+        service,
+        async dispose() {
+            if (!this.disposed) {
+                await service.onModuleDestroy();
+                this.disposed = true;
+            }
+
+            await rm(directory, { force: true, recursive: true });
+        },
+    };
+}

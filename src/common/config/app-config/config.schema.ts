@@ -24,7 +24,28 @@ export const configSchema = z
         TRAFFIC_AUDIT_FLUSH_INTERVAL_MS: z
             .string()
             .default('5000')
-            .transform((value) => parseInt(value, 10)),
+            .transform((value) => parseInt(value, 10))
+            .pipe(z.number().int().positive()),
+        TRAFFIC_AUDIT_QUEUE_MAX_SIZE: z
+            .string()
+            .default('20000')
+            .transform((value) => parseInt(value, 10))
+            .pipe(z.number().int().positive()),
+        TRAFFIC_AUDIT_REQUEST_TIMEOUT_MS: z
+            .string()
+            .default('10000')
+            .transform((value) => parseInt(value, 10))
+            .pipe(z.number().int().positive()),
+        TRAFFIC_AUDIT_BACKOFF_INITIAL_MS: z
+            .string()
+            .default('1000')
+            .transform((value) => parseInt(value, 10))
+            .pipe(z.number().int().positive()),
+        TRAFFIC_AUDIT_BACKOFF_MAX_MS: z
+            .string()
+            .default('60000')
+            .transform((value) => parseInt(value, 10))
+            .pipe(z.number().int().positive()),
         INTERNAL_REST_TOKEN: z.string(),
         SUPERVISORD_USER: z.string(),
         SUPERVISORD_PASSWORD: z.string(),
