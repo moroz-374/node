@@ -99,21 +99,51 @@ test('reads pending log data and flushes it during shutdown', async () => {
 
         assert.equal(payloads.length, 1);
         assert.equal(payloads[0].events[0].clientIdentifier, 'first-user');
+        assert.equal('nodeUuid' in payloads[0], false);
+        assert.deepEqual(payloads[0].metrics, {
+            queueDepth: 0,
+            droppedEventsTotal: 0,
+            retryAttemptsTotal: 0,
+            lastSuccessfulDeliveryAt: null,
+        });
         assert.equal(fixture.service.queue.length, 0);
     } finally {
         await fixture.dispose();
     }
 });
 
-async function createFixture(overrides = {}) {
+test('starts at the end of an existing log and only sends newly appended events', async () => {
+    const fixture = await createFixture({}, FIRST_LINE);
+    const payloads = [];
+
+    try {
+        global.fetch = async (_url, options) => {
+            payloads.push(JSON.parse(options.body));
+            return { ok: true, status: 200 };
+        };
+
+        await fixture.service.scheduleRead();
+        assert.equal(fixture.service.queue.length, 0);
+
+        await appendFile(fixture.logPath, SECOND_LINE);
+        await fixture.service.scheduleRead();
+        await fixture.service.flush();
+
+        assert.equal(payloads.length, 1);
+        assert.equal(payloads[0].events[0].clientIdentifier, 'second-user');
+    } finally {
+        await fixture.dispose();
+    }
+});
+
+async function createFixture(overrides = {}, initialContent = '') {
     const directory = await mkdtemp(join(tmpdir(), 'traffic-audit-'));
     const logPath = join(directory, 'access.log');
-    await writeFile(logPath, '');
+    await writeFile(logPath, initialContent);
 
     const config = {
         TRAFFIC_AUDIT_BACKEND_URL: 'http://backend.test',
-        TRAFFIC_AUDIT_INGEST_TOKEN: 'test-token',
-        TRAFFIC_AUDIT_NODE_UUID: '00000000-0000-0000-0000-000000000001',
+        TRAFFIC_AUDIT_CREDENTIAL: `${'a'.repeat(24)}.${'b'.repeat(43)}`,
         XRAY_ACCESS_LOG_PATH: logPath,
         TRAFFIC_AUDIT_FLUSH_INTERVAL_MS: 60_000,
         TRAFFIC_AUDIT_QUEUE_MAX_SIZE: 20_000,

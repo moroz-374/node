@@ -41,22 +41,23 @@ export class TrafficAuditService implements OnModuleDestroy, OnModuleInit {
     private flushTimer: NodeJS.Timeout | null = null;
     private hasCompletedInitialOpen = false;
     private nextFlushAt = 0;
-    private nodeUuid = '';
     private pollTimer: NodeJS.Timeout | null = null;
     private queueMaxSize = 20_000;
     private readonly queue: TrafficAuditPayloadEvent[] = [];
     private requestTimeoutMs = 10_000;
     private retryAttempt = 0;
     private shuttingDown = false;
-    private token = '';
+    private credential = '';
+    private droppedEventsTotal = 0;
+    private retryAttemptsTotal = 0;
+    private lastSuccessfulDeliveryAt: number | null = null;
     private accessLogPath = '';
 
     constructor(private readonly configService: ConfigService) {}
 
     public async onModuleInit(): Promise<void> {
         this.backendUrl = this.configService.getOrThrow<string>('TRAFFIC_AUDIT_BACKEND_URL');
-        this.token = this.configService.getOrThrow<string>('TRAFFIC_AUDIT_INGEST_TOKEN');
-        this.nodeUuid = this.configService.getOrThrow<string>('TRAFFIC_AUDIT_NODE_UUID');
+        this.credential = this.configService.getOrThrow<string>('TRAFFIC_AUDIT_CREDENTIAL');
         this.accessLogPath = this.configService.getOrThrow<string>('XRAY_ACCESS_LOG_PATH');
         this.flushIntervalMs = this.configService.getOrThrow<number>(
             'TRAFFIC_AUDIT_FLUSH_INTERVAL_MS',
@@ -70,9 +71,9 @@ export class TrafficAuditService implements OnModuleDestroy, OnModuleInit {
         );
         this.backoffMaxMs = this.configService.getOrThrow<number>('TRAFFIC_AUDIT_BACKOFF_MAX_MS');
 
-        if (!this.backendUrl || !this.token || !this.nodeUuid) {
+        if (!this.backendUrl || !this.credential) {
             this.logger.log(
-                'Traffic audit sender disabled: backend URL, ingest token, or node UUID is not configured',
+                'Traffic audit sender disabled: backend URL or credential is not configured',
             );
 
             return;
@@ -228,6 +229,7 @@ export class TrafficAuditService implements OnModuleDestroy, OnModuleInit {
         }
 
         if (droppedEvents > 0) {
+            this.droppedEventsTotal += droppedEvents;
             this.logger.warn(
                 `Traffic audit queue limit (${this.queueMaxSize}) reached; dropped ${droppedEvents} oldest events`,
             );
@@ -274,12 +276,17 @@ export class TrafficAuditService implements OnModuleDestroy, OnModuleInit {
             const response = await fetch(`${this.backendUrl}/api/monitoring/ingest`, {
                 method: 'POST',
                 headers: {
-                    Authorization: `Bearer ${this.token}`,
+                    Authorization: `Bearer ${this.credential}`,
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    nodeUuid: this.nodeUuid,
                     events,
+                    metrics: {
+                        queueDepth: this.queue.length,
+                        droppedEventsTotal: this.droppedEventsTotal,
+                        retryAttemptsTotal: this.retryAttemptsTotal,
+                        lastSuccessfulDeliveryAt: this.lastSuccessfulDeliveryAt,
+                    },
                 }),
                 signal: AbortSignal.timeout(this.requestTimeoutMs),
             });
@@ -290,11 +297,13 @@ export class TrafficAuditService implements OnModuleDestroy, OnModuleInit {
 
             this.retryAttempt = 0;
             this.nextFlushAt = 0;
+            this.lastSuccessfulDeliveryAt = Date.now();
 
             return true;
         } catch (error) {
             this.queue.unshift(...events);
             this.retryAttempt += 1;
+            this.retryAttemptsTotal += 1;
 
             const delay = Math.min(
                 this.backoffInitialMs * 2 ** (this.retryAttempt - 1),

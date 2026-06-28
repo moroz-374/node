@@ -18,9 +18,15 @@ export const configSchema = z
             return parseInt(port, 10);
         }),
         XRAY_ACCESS_LOG_PATH: z.string().default('/var/log/xray/access.log'),
-        TRAFFIC_AUDIT_BACKEND_URL: z.string().default(''),
-        TRAFFIC_AUDIT_INGEST_TOKEN: z.string().default(''),
-        TRAFFIC_AUDIT_NODE_UUID: z.string().default(''),
+        TRAFFIC_AUDIT_BACKEND_URL: z.union([z.literal(''), z.string().url()]).default(''),
+        TRAFFIC_AUDIT_CREDENTIAL: z
+            .string()
+            .refine(
+                (value) =>
+                    value === '' || /^[A-Za-z0-9_-]{20,64}\.[A-Za-z0-9_-]{32,128}$/.test(value),
+                'TRAFFIC_AUDIT_CREDENTIAL must use credentialId.secret format',
+            )
+            .default(''),
         TRAFFIC_AUDIT_FLUSH_INTERVAL_MS: z
             .string()
             .default('5000')
