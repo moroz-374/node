@@ -11,7 +11,7 @@ export interface TrafficAuditAccessLogEvent {
 }
 
 const ACCESS_LOG_REGEXP =
-    /^(?<date>\d{4}\/\d{2}\/\d{2}) (?<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?) (?<source>\S+) accepted (?<network>tcp|udp):(?<destination>\S+) \[(?<inbound>[^\]]+)](?: email: (?<email>\S+))?/;
+    /^(?<date>\d{4}\/\d{2}\/\d{2}) (?<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?) (?:from )?(?<source>\S+) accepted (?<network>tcp|udp):(?<destination>\S+) \[(?<inbound>[^\]]+)](?: email: (?<email>\S+))?/;
 
 export function parseTrafficAuditAccessLogLine(line: string): TrafficAuditAccessLogEvent | null {
     const match = ACCESS_LOG_REGEXP.exec(line.trim());
@@ -43,13 +43,11 @@ export function parseTrafficAuditAccessLogLine(line: string): TrafficAuditAccess
     };
 }
 
-function parseDestination(rawDestination: string):
-    | {
+function parseDestination(rawDestination: string): {
     destination: string;
     destinationType: TrafficAuditAccessLogEvent['destinationType'];
     port: number;
-}
-    | null {
+} | null {
     const normalized = rawDestination.trim();
 
     if (!normalized) {
@@ -74,13 +72,14 @@ function parseDestination(rawDestination: string):
     return buildParsedDestination(host, port);
 }
 
-function buildParsedDestination(host: string, portString: string):
-    | {
+function buildParsedDestination(
+    host: string,
+    portString: string,
+): {
     destination: string;
     destinationType: TrafficAuditAccessLogEvent['destinationType'];
     port: number;
-}
-    | null {
+} | null {
     const port = Number(portString);
 
     if (!Number.isInteger(port) || port < 1 || port > 65_535) {

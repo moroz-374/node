@@ -50,6 +50,7 @@ COPY ./libs ./libs
 
 RUN apk add --no-cache supervisor libnftnl libmnl && \
     mkdir -p /var/log/supervisor /var/log/xray && \
+    sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && \
     chmod +x /usr/local/bin/docker-entrypoint.sh && \
     ln -s /usr/local/bin/xray /usr/local/bin/rw-core
 

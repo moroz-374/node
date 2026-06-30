@@ -63,8 +63,10 @@ export const generateApiConfig = (args: IGenerateApiConfigParams): Record<string
         log: {
             ...((config.log as Record<string, unknown> | undefined) || {}),
             access: accessLogPath,
-            loglevel: ((config.log as Record<string, unknown> | undefined)?.loglevel as string | undefined) ||
-                'warning',
+            loglevel:
+                ((config.log as Record<string, unknown> | undefined)?.loglevel as
+                    | string
+                    | undefined) || 'warning',
         },
         ...XRAY_DEFAULT_STATS_MODEL,
         ...XRAY_DEFAULT_API_MODEL,

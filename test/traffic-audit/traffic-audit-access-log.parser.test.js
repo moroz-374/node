@@ -22,6 +22,17 @@ test('parses and normalizes a domain destination', () => {
     });
 });
 
+test('parses the current Xray access-log format with the from prefix', () => {
+    const event = parseTrafficAuditAccessLogLine(
+        '2026/06/29 11:24:18.480791 from 172.18.0.10:60858 accepted tcp:traffic-audit-target:8080 [vless-in >> direct] email: audit-enabled',
+    );
+
+    assert.equal(event.clientIdentifier, 'audit-enabled');
+    assert.equal(event.destination, 'traffic-audit-target');
+    assert.equal(event.network, 'tcp');
+    assert.equal(event.port, 8080);
+});
+
 test('parses bracketed IPv6 UDP destinations', () => {
     const event = parseTrafficAuditAccessLogLine(
         '2026/06/27 15:20:31 198.51.100.10:54321 accepted udp:[2001:db8::1]:53 [vless-in -> direct] email: user@example.com',
