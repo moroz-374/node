@@ -4,6 +4,9 @@ Node for Remnawave Panel.
 
 Learn more about Remnawave Panel [here](https://docs.rw/).
 
+Production setup, preflight checks, diagnostics, and upgrades are documented in
+[`docs/node-install-upgrade.md`](docs/node-install-upgrade.md).
+
 # Contributors
 
 Check [open issues](https://github.com/remnawave/panel/issues) to help the progress of this project.
