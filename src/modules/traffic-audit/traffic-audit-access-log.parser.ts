@@ -7,11 +7,17 @@ export interface TrafficAuditAccessLogEvent {
     network: 'tcp' | 'udp';
     port: number;
 
+    originalDestination?: string;
+    originalDestinationType?: 'DOMAIN' | 'IPV4' | 'IPV6' | 'UNKNOWN';
+    originalNetwork?: 'tcp' | 'udp';
+    originalPort?: number;
+    sniffedProtocol?: string;
+
     requestedAt: string;
 }
 
 const ACCESS_LOG_REGEXP =
-    /^(?<date>\d{4}\/\d{2}\/\d{2}) (?<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?) (?:from )?(?<source>\S+) accepted (?<network>tcp|udp):(?<destination>\S+) \[(?<inbound>[^\]]+)](?: email: (?<email>\S+))?/;
+    /^(?<date>\d{4}\/\d{2}\/\d{2}) (?<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?) (?:from )?(?<source>\S+) accepted (?<network>tcp|udp):(?<destination>\S+)(?: \[(?<inbound>[^\]]+)])?(?: email: (?<email>\S+))?(?: original: (?<original>(?:tcp|udp):\S+) sniffed: (?<sniffed>[a-z0-9][a-z0-9+._-]*))?$/;
 
 export function parseTrafficAuditAccessLogLine(line: string): TrafficAuditAccessLogEvent | null {
     const match = ACCESS_LOG_REGEXP.exec(line.trim());
@@ -33,13 +39,61 @@ export function parseTrafficAuditAccessLogLine(line: string): TrafficAuditAccess
         return null;
     }
 
-    return {
+    const event: TrafficAuditAccessLogEvent = {
         clientIdentifier,
         destination: parsedDestination.destination,
         destinationType: parsedDestination.destinationType,
         network,
         port: parsedDestination.port,
         requestedAt: parseXrayTimestamp(match.groups.date, match.groups.time),
+    };
+
+    if (match.groups.original || match.groups.sniffed) {
+        const original = match.groups.original;
+        const sniffed = match.groups.sniffed;
+        const parsedOriginalDestination = original ? parseTypedDestination(original) : null;
+
+        if (!parsedOriginalDestination || !sniffed) {
+            return null;
+        }
+
+        event.originalDestination = parsedOriginalDestination.destination;
+        event.originalDestinationType = parsedOriginalDestination.destinationType;
+        event.originalNetwork = parsedOriginalDestination.network;
+        event.originalPort = parsedOriginalDestination.port;
+        event.sniffedProtocol = sniffed;
+    }
+
+    return event;
+}
+
+function parseTypedDestination(rawDestination: string): {
+    destination: string;
+    destinationType: TrafficAuditAccessLogEvent['destinationType'];
+    network: TrafficAuditAccessLogEvent['network'];
+    port: number;
+} | null {
+    const separatorIndex = rawDestination.indexOf(':');
+
+    if (separatorIndex === -1) {
+        return null;
+    }
+
+    const network = rawDestination.slice(0, separatorIndex);
+
+    if (!isNetwork(network)) {
+        return null;
+    }
+
+    const parsedDestination = parseDestination(rawDestination.slice(separatorIndex + 1));
+
+    if (!parsedDestination) {
+        return null;
+    }
+
+    return {
+        ...parsedDestination,
+        network,
     };
 }
 

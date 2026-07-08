@@ -44,6 +44,53 @@ test('parses bracketed IPv6 UDP destinations', () => {
     assert.equal(event.port, 53);
 });
 
+test('parses extended access-log fields with original IPv4 destination', () => {
+    const event = parseTrafficAuditAccessLogLine(
+        '2026/07/06 12:00:00.000001 from 198.51.100.10:50000 accepted tcp:example.com:443 [vless-in >> direct] email: 3 original: tcp:203.0.113.20:443 sniffed: tls',
+    );
+
+    assert.deepEqual(event, {
+        clientIdentifier: '3',
+        destination: 'example.com',
+        destinationType: 'DOMAIN',
+        network: 'tcp',
+        originalDestination: '203.0.113.20',
+        originalDestinationType: 'IPV4',
+        originalNetwork: 'tcp',
+        originalPort: 443,
+        port: 443,
+        requestedAt: '2026-07-06T12:00:00.000Z',
+        sniffedProtocol: 'tls',
+    });
+});
+
+test('parses extended access-log fields with original bracketed IPv6 destination', () => {
+    const event = parseTrafficAuditAccessLogLine(
+        '2026/07/06 12:00:02.000003 from [2001:db8::100]:50002 accepted udp:example.com:443 [shadowsocks-in >> direct] email: 3 original: udp:[2001:db8::20]:443 sniffed: quic',
+    );
+
+    assert.equal(event.clientIdentifier, '3');
+    assert.equal(event.destination, 'example.com');
+    assert.equal(event.network, 'udp');
+    assert.equal(event.originalDestination, '2001:db8::20');
+    assert.equal(event.originalDestinationType, 'IPV6');
+    assert.equal(event.originalNetwork, 'udp');
+    assert.equal(event.originalPort, 443);
+    assert.equal(event.sniffedProtocol, 'quic');
+});
+
+test('parses extended access-log fields without detour but still requires attribution', () => {
+    const event = parseTrafficAuditAccessLogLine(
+        '2026/07/06 12:00:05.000006 from udp:198.51.100.10:50000 accepted udp:example.com:443 email: audit-user original: udp:origin.example.:443 sniffed: fakedns+others',
+    );
+
+    assert.equal(event.clientIdentifier, 'audit-user');
+    assert.equal(event.destination, 'example.com');
+    assert.equal(event.originalDestination, 'origin.example');
+    assert.equal(event.originalDestinationType, 'DOMAIN');
+    assert.equal(event.sniffedProtocol, 'fakedns+others');
+});
+
 test('ignores entries that cannot be attributed to a user', () => {
     assert.equal(
         parseTrafficAuditAccessLogLine(
@@ -61,4 +108,16 @@ test('ignores rejected and malformed entries', () => {
         null,
     );
     assert.equal(parseTrafficAuditAccessLogLine('not an xray access log line'), null);
+    assert.equal(
+        parseTrafficAuditAccessLogLine(
+            '2026/07/06 12:00:00.000001 from 198.51.100.10:50000 accepted tcp:example.com:443 [vless-in >> direct] email: 3 original: tcp:203.0.113.20:443',
+        ),
+        null,
+    );
+    assert.equal(
+        parseTrafficAuditAccessLogLine(
+            '2026/07/06 12:00:00.000001 from 198.51.100.10:50000 accepted tcp:example.com:443 [vless-in >> direct] email: 3 sniffed: tls',
+        ),
+        null,
+    );
 });
