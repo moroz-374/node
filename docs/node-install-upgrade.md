@@ -42,6 +42,22 @@ sudo ss -lntup | grep ':2222 '
 
 Replace `2222` if a different port is configured. For Xray output, run `docker exec remnanode xlogs`; for Xray errors, run `docker exec remnanode xerrors`. A healthy container proves that the node listener is available; panel connectivity and an active Xray configuration must also be checked in the panel.
 
+## Bundled Xray and licenses
+
+The node image contains Remnawave Node application code under AGPL-3.0-only and a bundled Xray-core binary under MPL-2.0. The combined image is labelled with both licenses and keeps the notices inside the container:
+
+```sh
+docker image inspect ghcr.io/moroz-374/remnawave-node:stable \
+  --format '{{json .Config.Labels}}'
+docker exec remnanode cat /usr/share/doc/remnawave-node/THIRD-PARTY-NOTICES.txt
+docker exec remnanode cat /usr/share/licenses/remnawave-node/LICENSE
+docker exec remnanode cat /usr/share/licenses/xray-core/LICENSE
+docker exec remnanode cat /usr/share/licenses/xray-core/NOTICE
+docker exec remnanode rw-core version
+```
+
+The `org.remnawave.xray.*` labels identify the exact Xray-core fork repository, version, source revision and release asset checksums used by the image. The release manifest and source bundle repeat the same values.
+
 ## Upgrade
 
 Upgrade the panel first. If the panel reports that traffic audit is not configured, rotate the node traffic-audit credential and replace the compose file with the newly generated one. Rotation revokes the previous credential immediately.

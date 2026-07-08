@@ -35,6 +35,8 @@ RUN apk add --no-cache curl unzip \
     install -m 0755 xray/xray /usr/local/bin/xray; \
     install -m 0644 xray/geoip.dat /usr/local/share/xray/geoip.dat; \
     install -m 0644 xray/geosite.dat /usr/local/share/xray/geosite.dat; \
+    install -m 0644 xray/LICENSE /usr/local/share/xray/LICENSE; \
+    install -m 0644 xray/NOTICE /usr/local/share/xray/NOTICE; \
     cd /; \
     rm -rf "${xray_tmp}"
 
@@ -60,8 +62,11 @@ LABEL org.opencontainers.image.description="Remnawave Node with built-in XRay Co
 LABEL org.opencontainers.image.url="https://github.com/moroz-374/node"
 LABEL org.opencontainers.image.source="https://github.com/moroz-374/node"
 LABEL org.opencontainers.image.vendor="Remnawave"
-LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
+LABEL org.opencontainers.image.licenses="AGPL-3.0-only AND MPL-2.0"
 LABEL org.opencontainers.image.documentation="https://docs.rw"
+LABEL org.remnawave.licenses.remnawave="AGPL-3.0-only"
+LABEL org.remnawave.licenses.xray="MPL-2.0"
+LABEL org.remnawave.licenses.notice="/usr/share/doc/remnawave-node/THIRD-PARTY-NOTICES.txt"
 LABEL org.remnawave.xray.repository="${XRAY_CORE_REPOSITORY}"
 LABEL org.remnawave.xray.version="${XRAY_CORE_VERSION}"
 LABEL org.remnawave.xray.revision="${XRAY_CORE_REVISION}"
@@ -74,19 +79,40 @@ COPY --from=build /opt/app/dist /opt/app/dist
 COPY --from=build /usr/local/bin/xray /usr/local/bin/xray
 COPY --from=build /usr/local/share/xray/geoip.dat /usr/local/share/xray/geoip.dat
 COPY --from=build /usr/local/share/xray/geosite.dat /usr/local/share/xray/geosite.dat
+COPY --from=build /usr/local/share/xray/LICENSE /usr/share/licenses/xray-core/LICENSE
+COPY --from=build /usr/local/share/xray/NOTICE /usr/share/licenses/xray-core/NOTICE
 COPY --from=build /usr/local/bin/xlogs /usr/local/bin/xlogs
 COPY --from=build /usr/local/bin/xerrors /usr/local/bin/xerrors
 
 COPY supervisord.conf /etc/supervisord.conf
 COPY docker-entrypoint.sh /usr/local/bin/
 COPY package*.json ./
+COPY LICENCE /usr/share/licenses/remnawave-node/LICENSE
 COPY ./libs ./libs
 
 RUN apk add --no-cache supervisor libnftnl libmnl && \
-    mkdir -p /var/log/supervisor /var/log/xray && \
+    mkdir -p /var/log/supervisor /var/log/xray /usr/share/doc/remnawave-node && \
     sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && \
     chmod +x /usr/local/bin/docker-entrypoint.sh && \
-    ln -s /usr/local/bin/xray /usr/local/bin/rw-core
+    ln -s /usr/local/bin/xray /usr/local/bin/rw-core && \
+    { \
+      echo 'Remnawave Node license notice'; \
+      echo; \
+      echo 'This container combines separate components under separate licenses.'; \
+      echo 'Remnawave Node application code is licensed under AGPL-3.0-only.'; \
+      echo 'The bundled Xray-core binary and its Xray-core source modifications are licensed under MPL-2.0.'; \
+      echo; \
+      echo "Bundled Xray-core repository: ${XRAY_CORE_REPOSITORY}"; \
+      echo "Bundled Xray-core version: ${XRAY_CORE_VERSION}"; \
+      echo "Bundled Xray-core source revision: ${XRAY_CORE_REVISION}"; \
+      echo "Bundled Xray-core linux/amd64 asset sha256: ${XRAY_CORE_AMD64_SHA256}"; \
+      echo "Bundled Xray-core linux/arm64 asset sha256: ${XRAY_CORE_ARM64_SHA256}"; \
+      echo; \
+      echo 'License files:'; \
+      echo '- /usr/share/licenses/remnawave-node/LICENSE'; \
+      echo '- /usr/share/licenses/xray-core/LICENSE'; \
+      echo '- /usr/share/licenses/xray-core/NOTICE'; \
+    } > /usr/share/doc/remnawave-node/THIRD-PARTY-NOTICES.txt
 
 RUN npm ci --omit=dev --legacy-peer-deps \
     && npm cache clean --force \
