@@ -3,6 +3,7 @@ FROM node:24.14-alpine AS build
 ARG TARGETARCH
 ARG XRAY_CORE_REPOSITORY=moroz-374/Xray-core
 ARG XRAY_CORE_VERSION=v26.3.27-rw.1-rc.1
+ARG XRAY_CORE_REVISION=d69534e75e12bd901671a87f0edf5709db98edd9
 ARG XRAY_CORE_AMD64_SHA256=84493d09e23a24812dd021dcdc8189dc20a59ec8ad7474c24afa23b3c452f55f
 ARG XRAY_CORE_ARM64_SHA256=597a747f5e542623ee09c54dec87a9b8c07badbc71ab94db429f4b84ca0dc6b9
 
@@ -48,6 +49,12 @@ RUN echo '#!/bin/sh' > /usr/local/bin/xerrors \
 
 FROM node:24.14-alpine
 
+ARG XRAY_CORE_REPOSITORY=moroz-374/Xray-core
+ARG XRAY_CORE_VERSION=v26.3.27-rw.1-rc.1
+ARG XRAY_CORE_REVISION=d69534e75e12bd901671a87f0edf5709db98edd9
+ARG XRAY_CORE_AMD64_SHA256=84493d09e23a24812dd021dcdc8189dc20a59ec8ad7474c24afa23b3c452f55f
+ARG XRAY_CORE_ARM64_SHA256=597a747f5e542623ee09c54dec87a9b8c07badbc71ab94db429f4b84ca0dc6b9
+
 LABEL org.opencontainers.image.title="Remnawave Node"
 LABEL org.opencontainers.image.description="Remnawave Node with built-in XRay Core"
 LABEL org.opencontainers.image.url="https://github.com/moroz-374/node"
@@ -55,6 +62,11 @@ LABEL org.opencontainers.image.source="https://github.com/moroz-374/node"
 LABEL org.opencontainers.image.vendor="Remnawave"
 LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 LABEL org.opencontainers.image.documentation="https://docs.rw"
+LABEL org.remnawave.xray.repository="${XRAY_CORE_REPOSITORY}"
+LABEL org.remnawave.xray.version="${XRAY_CORE_VERSION}"
+LABEL org.remnawave.xray.revision="${XRAY_CORE_REVISION}"
+LABEL org.remnawave.xray.asset.linux-amd64.sha256="${XRAY_CORE_AMD64_SHA256}"
+LABEL org.remnawave.xray.asset.linux-arm64.sha256="${XRAY_CORE_ARM64_SHA256}"
 
 WORKDIR /opt/app
 
