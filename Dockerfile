@@ -37,6 +37,44 @@ RUN apk add --no-cache curl unzip \
     install -m 0644 xray/geosite.dat /usr/local/share/xray/geosite.dat; \
     install -m 0644 xray/LICENSE /usr/local/share/xray/LICENSE; \
     install -m 0644 xray/NOTICE /usr/local/share/xray/NOTICE; \
+    xray_version="$(/usr/local/bin/xray version 2>&1)"; \
+    printf '%s\n' "${xray_version}"; \
+    printf '%s\n' "${xray_version}" | grep -F "${XRAY_CORE_VERSION}@${XRAY_CORE_REVISION}"; \
+    xray_test_config="/tmp/xray-build-verify.json"; \
+    printf '%s\n' \
+        '{' \
+        '  "log": {' \
+        '    "loglevel": "warning"' \
+        '  },' \
+        '  "inbounds": [' \
+        '    {' \
+        '      "tag": "build-verify",' \
+        '      "listen": "127.0.0.1",' \
+        '      "port": 39091,' \
+        '      "protocol": "dokodemo-door",' \
+        '      "settings": {' \
+        '        "address": "127.0.0.1",' \
+        '        "port": 80,' \
+        '        "network": "tcp"' \
+        '      },' \
+        '      "sniffing": {' \
+        '        "enabled": true,' \
+        '        "destOverride": ["http", "tls"],' \
+        '        "logSniffedDestination": true' \
+        '      }' \
+        '    }' \
+        '  ],' \
+        '  "outbounds": [' \
+        '    {' \
+        '      "tag": "direct",' \
+        '      "protocol": "freedom"' \
+        '    }' \
+        '  ]' \
+        '}' > "${xray_test_config}"; \
+    xray_test_output="$(/usr/local/bin/xray run -test -c "${xray_test_config}" 2>&1)"; \
+    printf '%s\n' "${xray_test_output}"; \
+    printf '%s\n' "${xray_test_output}" | grep -F 'Configuration OK.'; \
+    rm -f "${xray_test_config}"; \
     cd /; \
     rm -rf "${xray_tmp}"
 
@@ -95,6 +133,46 @@ RUN apk add --no-cache supervisor libnftnl libmnl && \
     sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && \
     chmod +x /usr/local/bin/docker-entrypoint.sh && \
     ln -s /usr/local/bin/xray /usr/local/bin/rw-core && \
+    test "$(readlink /usr/local/bin/rw-core)" = "/usr/local/bin/xray" && \
+    test "$(readlink -f /usr/local/bin/rw-core)" = "/usr/local/bin/xray" && \
+    xray_version="$(/usr/local/bin/rw-core version 2>&1)" && \
+    printf '%s\n' "$xray_version" && \
+    printf '%s\n' "$xray_version" | grep -F "${XRAY_CORE_VERSION}@${XRAY_CORE_REVISION}" && \
+    xray_test_config="/tmp/xray-runtime-verify.json" && \
+    printf '%s\n' \
+      '{' \
+      '  "log": {' \
+      '    "loglevel": "warning"' \
+      '  },' \
+      '  "inbounds": [' \
+      '    {' \
+      '      "tag": "runtime-verify",' \
+      '      "listen": "127.0.0.1",' \
+      '      "port": 39091,' \
+      '      "protocol": "dokodemo-door",' \
+      '      "settings": {' \
+      '        "address": "127.0.0.1",' \
+      '        "port": 80,' \
+      '        "network": "tcp"' \
+      '      },' \
+      '      "sniffing": {' \
+      '        "enabled": true,' \
+      '        "destOverride": ["http", "tls"],' \
+      '        "logSniffedDestination": true' \
+      '      }' \
+      '    }' \
+      '  ],' \
+      '  "outbounds": [' \
+      '    {' \
+      '      "tag": "direct",' \
+      '      "protocol": "freedom"' \
+      '    }' \
+      '  ]' \
+      '}' > "$xray_test_config" && \
+    xray_test_output="$(/usr/local/bin/rw-core run -test -c "$xray_test_config" 2>&1)" && \
+    printf '%s\n' "$xray_test_output" && \
+    printf '%s\n' "$xray_test_output" | grep -F 'Configuration OK.' && \
+    rm -f "$xray_test_config" && \
     { \
       echo 'Remnawave Node license notice'; \
       echo; \
