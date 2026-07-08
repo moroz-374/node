@@ -1,8 +1,10 @@
 FROM node:24.14-alpine AS build
 
-ARG XRAY_CORE_VERSION=v26.3.27
-ARG UPSTREAM_REPO=XTLS
-ARG XRAY_CORE_INSTALL_SCRIPT=https://raw.githubusercontent.com/remnawave/scripts/main/scripts/install-xray.sh
+ARG TARGETARCH
+ARG XRAY_CORE_REPOSITORY=moroz-374/Xray-core
+ARG XRAY_CORE_VERSION=v26.3.27-rw.1-rc.1
+ARG XRAY_CORE_AMD64_SHA256=84493d09e23a24812dd021dcdc8189dc20a59ec8ad7474c24afa23b3c452f55f
+ARG XRAY_CORE_ARM64_SHA256=597a747f5e542623ee09c54dec87a9b8c07badbc71ab94db429f4b84ca0dc6b9
 
 WORKDIR /opt/app
 
@@ -13,7 +15,27 @@ RUN npm run build --omit=dev
 RUN npm run test:traffic-audit
 
 RUN apk add --no-cache curl unzip \
-    && curl -L ${XRAY_CORE_INSTALL_SCRIPT} | sh -s -- ${XRAY_CORE_VERSION} ${UPSTREAM_REPO}
+    && set -eux; \
+    case "${TARGETARCH}" in \
+        amd64) xray_asset="Xray-linux-64.zip"; xray_sha256="${XRAY_CORE_AMD64_SHA256}" ;; \
+        arm64) xray_asset="Xray-linux-arm64-v8a.zip"; xray_sha256="${XRAY_CORE_ARM64_SHA256}" ;; \
+        *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    xray_base_url="https://github.com/${XRAY_CORE_REPOSITORY}/releases/download/${XRAY_CORE_VERSION}"; \
+    xray_tmp="$(mktemp -d)"; \
+    cd "${xray_tmp}"; \
+    curl --fail --location --show-error --proto '=https' --tlsv1.2 --output "${xray_asset}" "${xray_base_url}/${xray_asset}"; \
+    curl --fail --location --show-error --proto '=https' --tlsv1.2 --output "${xray_asset}.sha256" "${xray_base_url}/${xray_asset}.sha256"; \
+    grep -Eq "^[0-9a-f]{64}[[:space:]]+\\*?${xray_asset}$" "${xray_asset}.sha256"; \
+    sha256sum -c "${xray_asset}.sha256"; \
+    printf '%s  %s\n' "${xray_sha256}" "${xray_asset}" | sha256sum -c -; \
+    unzip -q "${xray_asset}" -d xray; \
+    mkdir -p /usr/local/share/xray; \
+    install -m 0755 xray/xray /usr/local/bin/xray; \
+    install -m 0644 xray/geoip.dat /usr/local/share/xray/geoip.dat; \
+    install -m 0644 xray/geosite.dat /usr/local/share/xray/geosite.dat; \
+    cd /; \
+    rm -rf "${xray_tmp}"
 
 RUN echo '#!/bin/sh' > /usr/local/bin/xlogs \
     && echo 'tail -n +1 -f /var/log/supervisor/xray.out.log' >> /usr/local/bin/xlogs \
