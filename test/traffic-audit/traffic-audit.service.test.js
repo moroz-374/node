@@ -98,6 +98,7 @@ test('reads pending log data and flushes it during shutdown', async () => {
         fixture.disposed = true;
 
         assert.equal(payloads.length, 1);
+        assert.equal(payloads[0].schemaVersion, 2);
         assert.equal(payloads[0].events[0].clientIdentifier, 'first-user');
         assert.equal('nodeUuid' in payloads[0], false);
         assert.deepEqual(payloads[0].metrics, {
@@ -107,6 +108,35 @@ test('reads pending log data and flushes it during shutdown', async () => {
             lastSuccessfulDeliveryAt: null,
         });
         assert.equal(fixture.service.queue.length, 0);
+    } finally {
+        await fixture.dispose();
+    }
+});
+
+test('sends schema version 2 with extended parser fields', async () => {
+    const fixture = await createFixture();
+    const payloads = [];
+
+    try {
+        global.fetch = async (_url, options) => {
+            payloads.push(JSON.parse(options.body));
+            return { ok: true, status: 200 };
+        };
+
+        await appendFile(
+            fixture.logPath,
+            '2026/07/06 12:00:00.000001 from 198.51.100.10:50000 accepted tcp:example.com:443 [vless-in >> direct] email: audit-user original: tcp:203.0.113.20:443 sniffed: tls\n',
+        );
+        await fixture.service.scheduleRead();
+        await fixture.service.flush();
+
+        assert.equal(payloads.length, 1);
+        assert.equal(payloads[0].schemaVersion, 2);
+        assert.equal(payloads[0].events[0].originalDestination, '203.0.113.20');
+        assert.equal(payloads[0].events[0].originalDestinationType, 'IPV4');
+        assert.equal(payloads[0].events[0].originalNetwork, 'tcp');
+        assert.equal(payloads[0].events[0].originalPort, 443);
+        assert.equal(payloads[0].events[0].sniffedProtocol, 'tls');
     } finally {
         await fixture.dispose();
     }

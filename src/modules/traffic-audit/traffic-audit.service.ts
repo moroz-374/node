@@ -280,6 +280,7 @@ export class TrafficAuditService implements OnModuleDestroy, OnModuleInit {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
+                    schemaVersion: 2,
                     events,
                     metrics: {
                         queueDepth: this.queue.length,
